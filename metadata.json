@@ -1,0 +1,8 @@
+{
+  "name": "MelodyMind & Muse",
+  "description": "A daily musical education app that pairs classical and popular masterpieces with deep historical context, combined with an AI-powered image editing studio and multimodal intelligence.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
