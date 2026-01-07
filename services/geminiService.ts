@@ -4,21 +4,22 @@ import { SongRecommendation } from "../types";
 
 const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
 
+// World-class implementation of daily song generation
 export const generateDailySong = async (date: string): Promise<SongRecommendation> => {
   const ai = getAI();
-  const prompt = `You are a world-class musicologist and educator. Generate a high-quality music recommendation for a student for: ${date}.
+  const prompt = `You are a world-class music historian and artistic curator. Generate a premium music recommendation for: ${date}.
   
-  TARGET AUDIENCE: Teens and Adults.
-  LANGUAGE STYLE: Sophisticated, captivating, and elaborate, yet accessible. Avoid dry academic jargon; instead, use evocative storytelling. 
+  AUDIENCE: Curious teens and adults.
+  TONE: Eloquent, evocative, and deeply analytical, yet remaining accessible and engaging. Avoid dry academic lists; use narrative prose.
   
-  CRITERIA:
-  - Alternate between Classical (Baroque, Romantic, Impressionist, Minimalist) and Influential Popular (Jazz, Delta Blues, 70s Art Rock, 90s Trip Hop, etc.).
+  GUIDELINES:
+  - Alternate between Classical (Renaissance to Minimalist) and Influential Popular (Jazz, Motown, Art Rock, Hip-Hop Pioneers).
   - Duration: 2-6 minutes.
-  - Historical Context: A deep, immersive narrative about the era's social climate and the composer's personal journey.
-  - Musical Analysis: An evocative guide on what to listen for—texture, emotional arc, and instrumental nuances.
-  - Fun Fact: A surprising, humanizing detail that brings the history to life.
+  - Historical Context: A narrative that contextualizes the piece within the world it was born into.
+  - Musical Analysis: An auditory map describing what to feel and hear—the textures, the harmonic tensions, and the resolution.
+  - Fun Fact: A humanizing or technical curiosity that is genuinely surprising.
   
-  Return in strict JSON format. Use a high-quality YouTube Video ID.`;
+  Return in strict JSON format. Use a high-quality YouTube Video ID for a performance.`;
 
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
@@ -46,6 +47,7 @@ export const generateDailySong = async (date: string): Promise<SongRecommendatio
   return { ...JSON.parse(response.text || "{}"), id: `song-${date}`, date };
 };
 
+// Fixed transcribeAudio to use correct structured parts for multimodal input
 export const transcribeAudio = async (audioBlob: Blob): Promise<string> => {
   const ai = getAI();
   const reader = new FileReader();
@@ -57,14 +59,17 @@ export const transcribeAudio = async (audioBlob: Blob): Promise<string> => {
 
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: [
-      { inlineData: { mimeType: 'audio/wav', data: base64 } },
-      { text: "Transcribe this audio. Just return the text of the reflection." }
-    ]
+    contents: {
+      parts: [
+        { inlineData: { mimeType: 'audio/wav', data: base64 } },
+        { text: "Transcribe the following reflection into clean, readable prose." }
+      ]
+    }
   });
   return response.text || "";
 };
 
+// Implementation of high-quality speech generation using Gemini TTS
 export const generateSpeech = async (text: string): Promise<string> => {
   const ai = getAI();
   const response = await ai.models.generateContent({
@@ -78,92 +83,117 @@ export const generateSpeech = async (text: string): Promise<string> => {
   return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || "";
 };
 
-// Fix for AIHub.tsx: Implemented getChatResponse with thinking support
-export const getChatResponse = async (history: string[], useThinking: boolean): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const prompt = history[history.length - 1];
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-pro-preview',
-    contents: prompt,
-    config: useThinking ? { thinkingConfig: { thinkingBudget: 32768 } } : {}
-  });
-  return response.text || "";
-};
+// Implementation of image editing using gemini-2.5-flash-image
+export const editImageWithPrompt = async (image: string, prompt: string): Promise<string> => {
+  const ai = getAI();
+  const base64Data = image.split(',')[1];
+  const mimeType = image.split(';')[0].split(':')[1];
 
-// Fix for AIHub.tsx: Implemented getFastResponse using the lite model
-export const getFastResponse = async (prompt: string): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const response = await ai.models.generateContent({
-    model: 'gemini-flash-lite-latest',
-    contents: prompt,
-  });
-  return response.text || "";
-};
-
-// Fix for AIHub.tsx: Implemented analyzeVideo for multimodal content
-export const analyzeVideo = async (videoFile: File): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const base64Promise = new Promise<string>((resolve) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve((reader.result as string).split(',')[1]);
-    reader.readAsDataURL(videoFile);
-  });
-  const base64 = await base64Promise;
-
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: [
-      { inlineData: { mimeType: videoFile.type, data: base64 } },
-      { text: "Analyze this video and provide a summary of its musical content." }
-    ]
-  });
-  return response.text || "";
-};
-
-// Fix for ImageEditor.tsx: Implemented editImageWithPrompt using gemini-2.5-flash-image
-export const editImageWithPrompt = async (base64Image: string, prompt: string): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const imageData = base64Image.split(',')[1] || base64Image;
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash-image',
     contents: {
       parts: [
-        { inlineData: { data: imageData, mimeType: 'image/png' } },
+        { inlineData: { data: base64Data, mimeType: mimeType } },
         { text: prompt },
       ],
     },
   });
-  for (const part of response.candidates?.[0]?.content?.parts || []) {
+
+  let imageUrl = "";
+  for (const part of response.candidates?.[0].content.parts || []) {
     if (part.inlineData) {
-      return `data:image/png;base64,${part.inlineData.data}`;
+      imageUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+      break;
     }
   }
-  return "";
+  return imageUrl;
 };
 
-// Fix for ImageEditor.tsx: Implemented generateVeoVideo for high-quality animations
-export const generateVeoVideo = async (base64Image: string, prompt: string): Promise<string> => {
+// Implementation of video generation using Veo 3.1 Fast
+export const generateVeoVideo = async (image: string, prompt: string): Promise<string> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const imageData = base64Image.split(',')[1] || base64Image;
+  const base64Data = image.split(',')[1];
+  const mimeType = image.split(';')[0].split(':')[1];
+
   let operation = await ai.models.generateVideos({
     model: 'veo-3.1-fast-generate-preview',
     prompt: prompt,
     image: {
-      imageBytes: imageData,
-      mimeType: 'image/png',
+      imageBytes: base64Data,
+      mimeType: mimeType,
     },
     config: {
       numberOfVideos: 1,
       resolution: '720p',
-      aspectRatio: '1:1'
+      aspectRatio: '16:9'
     }
   });
+
+  // Poll for operation completion
   while (!operation.done) {
     await new Promise(resolve => setTimeout(resolve, 10000));
     operation = await ai.operations.getVideosOperation({ operation: operation });
   }
+
   const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-  return `${downloadLink}&key=${process.env.API_KEY}`;
+  // Use current API key for download as required
+  const videoResponse = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
+  const blob = await videoResponse.blob();
+  return URL.createObjectURL(blob);
+};
+
+// Implementation of complex chat logic with thinking budget support
+export const getChatResponse = async (history: string[], useThinking: boolean): Promise<string> => {
+  const ai = getAI();
+  const model = useThinking ? 'gemini-3-pro-preview' : 'gemini-3-flash-preview';
+  
+  // Format history into required Content array
+  const contents = history.map((text, i) => ({
+    role: i % 2 === 0 ? 'user' : 'model',
+    parts: [{ text }]
+  }));
+
+  const response = await ai.models.generateContent({
+    model,
+    contents,
+    config: useThinking ? { 
+      thinkingConfig: { thinkingBudget: 32768 } 
+    } : {}
+  });
+
+  return response.text || "";
+};
+
+// Implementation of fast low-latency text response using flash lite
+export const getFastResponse = async (prompt: string): Promise<string> => {
+  const ai = getAI();
+  const response = await ai.models.generateContent({
+    model: 'gemini-flash-lite-latest',
+    contents: prompt
+  });
+  return response.text || "";
+};
+
+// Implementation of video analysis using gemini-3-flash-preview
+export const analyzeVideo = async (videoFile: File): Promise<string> => {
+  const ai = getAI();
+  const base64 = await new Promise<string>((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as string).split(',')[1]);
+    reader.readAsDataURL(videoFile);
+  });
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: {
+      parts: [
+        { inlineData: { mimeType: videoFile.type, data: base64 } },
+        { text: "Analyze this video and provide a summary of its musical content and key moments." }
+      ]
+    }
+  });
+
+  return response.text || "";
 };
 
 export function decodeBase64ToUint8(base64: string) {

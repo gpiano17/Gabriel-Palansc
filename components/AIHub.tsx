@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { getChatResponse, getFastResponse, analyzeVideo } from '../services/geminiService';
-import { GoogleGenAI, Modality } from '@google/genai';
+import { getChatResponse, getFastResponse, analyzeVideo, decodeBase64ToUint8, decodeAudioData } from '../services/geminiService';
+import { GoogleGenAI, Modality, LiveServerMessage } from '@google/genai';
 
 export const AIHub: React.FC = () => {
   const [activeTool, setActiveTool] = useState<'chat' | 'video' | 'voice'>('chat');
@@ -13,6 +13,9 @@ export const AIHub: React.FC = () => {
   
   const [isVoiceActive, setIsVoiceActive] = useState(false);
   const voiceSessionRef = useRef<any>(null);
+  const nextStartTimeRef = useRef<number>(0);
+  const outputAudioContextRef = useRef<AudioContext | null>(null);
+  const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
 
   const handleChat = async () => {
     if (!input.trim()) return;
@@ -42,30 +45,89 @@ export const AIHub: React.FC = () => {
     } finally { setLoading(false); }
   };
 
+  // Fixed toggleVoice to implement real-time PCM audio streaming and playback following SDK guidelines
   const toggleVoice = async () => {
     if (isVoiceActive) {
-      voiceSessionRef.current?.close();
+      voiceSessionRef.current?.then((session: any) => session.close());
       setIsVoiceActive(false);
       return;
     }
 
+    if (!outputAudioContextRef.current) {
+      outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+    }
+    const ctx = outputAudioContextRef.current;
+
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const session = await ai.live.connect({
+    const sessionPromise = ai.live.connect({
       model: 'gemini-2.5-flash-native-audio-preview-12-2025',
       callbacks: {
-        onopen: () => setIsVoiceActive(true),
-        onmessage: async (msg) => {
-          if (msg.serverContent?.modelTurn?.parts[0]?.inlineData?.data) {
-             // Basic implementation would play the PCM stream here
-             console.log("Audio chunk received");
+        onopen: () => {
+          setIsVoiceActive(true);
+          // Start capturing microphone audio
+          navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+            const inputCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+            const source = inputCtx.createMediaStreamSource(stream);
+            const scriptProcessor = inputCtx.createScriptProcessor(4096, 1, 1);
+            
+            scriptProcessor.onaudioprocess = (e) => {
+              const inputData = e.inputBuffer.getChannelData(0);
+              const l = inputData.length;
+              const int16 = new Int16Array(l);
+              for (let i = 0; i < l; i++) int16[i] = inputData[i] * 32768;
+              
+              // Manual base64 encoding for raw PCM stream
+              let binary = '';
+              const bytes = new Uint8Array(int16.buffer);
+              const len = bytes.byteLength;
+              for (let i = 0; i < len; i++) binary += String.fromCharCode(bytes[i]);
+              const b64 = btoa(binary);
+              
+              // Use sessionPromise to prevent race conditions during initialization
+              sessionPromise.then(session => {
+                session.sendRealtimeInput({
+                  media: { data: b64, mimeType: 'audio/pcm;rate=16000' }
+                });
+              });
+            };
+            source.connect(scriptProcessor);
+            scriptProcessor.connect(inputCtx.destination);
+          });
+        },
+        onmessage: async (message: LiveServerMessage) => {
+          const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
+          if (base64Audio) {
+            nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
+            const uint8 = decodeBase64ToUint8(base64Audio);
+            // Decode raw PCM data using the world-class utility function
+            const audioBuffer = await decodeAudioData(uint8, ctx);
+            const source = ctx.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(ctx.destination);
+            
+            // Precise scheduling for gapless playback
+            source.start(nextStartTimeRef.current);
+            nextStartTimeRef.current += audioBuffer.duration;
+            sourcesRef.current.add(source);
+            source.onended = () => sourcesRef.current.delete(source);
+          }
+
+          // Handle interruptions to clear audio queue
+          if (message.serverContent?.interrupted) {
+            sourcesRef.current.forEach(s => s.stop());
+            sourcesRef.current.clear();
+            nextStartTimeRef.current = 0;
           }
         },
         onerror: () => setIsVoiceActive(false),
         onclose: () => setIsVoiceActive(false),
       },
-      config: { responseModalities: [Modality.AUDIO], systemInstruction: "You are a musical AI tutor." }
+      config: { 
+        responseModalities: [Modality.AUDIO], 
+        systemInstruction: "You are a musical AI tutor. Keep responses concise and melodic." 
+      }
     });
-    voiceSessionRef.current = session;
+    voiceSessionRef.current = sessionPromise;
   };
 
   return (
